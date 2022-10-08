@@ -1174,6 +1174,50 @@ class BinanceSocketManager:
 
         del (self._conns[conn_key])
 
+from typing import Awaitable, Callable
+from binance.listeners import AbstractListener
+
+
+class Poller(AbstractListener):
+
+    def __init__(
+        self, method: Callable[[int], Awaitable[None]], path: str, delay: int = 60, params: Optional[dict] = None
+    ):
+        self.method = method
+        self.delay = delay
+        self.params = params
+        self.path = path
+
+    def __aexit__(self, exc_type, exc_val, exc_tb):
+        pass
+
+    async def recv(self):
+        await asyncio.sleep(self.delay)
+        return await self.method(**self.params)
+
+class ThreadedPollingManager(ThreadedApiManager):
+    #
+    # def __init__(
+    #     self, api_key: Optional[str] = None, api_secret: Optional[str] = None,
+    #     requests_params: Optional[Dict[str, str]] = None, tld: str = 'com',
+    #     testnet: bool = False
+    # ):
+    #     super().__init__(api_key, api_secret, requests_params, tld, testnet)
+
+    async def _before_listener_start(self):
+        assert self._client
+
+    def _start_async_polling(
+        self, callback: Callable, method_name: str, params: Dict[str, Any], path: Optional[str] = None
+    ) -> str:
+        method = getattr(self._client, method_name)
+        poller = Poller(method, )
+        socket = getattr(self._client, method_name)(**params)
+        socket_path: str = path or socket._path  # noqa
+        self._listener_running[socket_path] = True
+        self._loop.call_soon_threadsafe(asyncio.create_task, self.start_listener(socket, socket_path, callback))
+        return socket_path
+
 
 class ThreadedWebsocketManager(ThreadedApiManager):
 
@@ -1510,3 +1554,5 @@ class ThreadedWebsocketManager(ThreadedApiManager):
                 'futures_type': futures_type
             }
         )
+
+
