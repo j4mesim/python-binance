@@ -4,7 +4,7 @@ import asyncio
 import time
 from typing import Optional, Dict, Callable
 
-from .listeners import AbstractListener
+from .listeners import ApiListener
 from .streams import BinanceSocketManager
 from .threaded_stream import ThreadedApiManager
 
@@ -129,7 +129,7 @@ class DepthCache(object):
         return lst
 
 
-class BaseDepthCacheManager(AbstractListener):
+class BaseDepthCacheManager(ApiListener):
     DEFAULT_REFRESH = 60 * 30  # 30 minutes
     TIMEOUT = 60
 

@@ -37,3 +37,6 @@ def test_api_exception_invalid_json():
             not_json_str = "<html><body>Error</body></html>"
             m.get("https://api.binance.com/api/v3/time", text=not_json_str, status_code=400)
             client.get_server_time()
+
+
+

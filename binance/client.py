@@ -6976,7 +6976,7 @@ class Client(BaseClient):
         :type quantity: float
         :param price: optional - Order Price - 1000
         :type price: float
-        :param timeInForce: optional - Time in force method（Default GTC) - GTC
+        :param timeInForce: optional - Time in force http_method（Default GTC) - GTC
         :type timeInForce: str (ENUM)
         :param reduceOnly: optional - Reduce Only (Default false) - false
         :type reduceOnly: bool
@@ -8557,3 +8557,55 @@ class AsyncClient(BaseClient):
 
     async def get_c2c_trade_history(self, **params):
         return await self._request_margin_api('get', 'c2c/orderMatch/listUserOrderHistory', signed=True, data=params)
+
+
+class ClientPathBuilder(Client):
+
+    def _request(self, method, uri: str, signed: bool, force_params: bool = False, **kwargs):
+        return method, uri, signed, force_params, kwargs
+
+
+class AsyncClientPathBuilder(AsyncClient):
+
+    async def _request(self, http_method, uri: str, signed: bool, force_params: bool = False, **kwargs):
+        return http_method, uri, signed, force_params, kwargs
+
+    async def _request_api(self, http_method, path, signed=False, version=BaseClient.PUBLIC_API_VERSION, **kwargs):
+        uri = self._create_api_uri(path, signed, version)
+        info = await self._request(http_method, uri, signed, **kwargs)
+        return *info, path
+
+    async def _request_futures_api(self, http_method, path, signed=False, **kwargs) -> Tuple:
+        uri = self._create_futures_api_uri(path)
+        info = await self._request(http_method, uri, signed, **kwargs)
+        return *info, path
+
+    async def _request_futures_data_api(self, http_method, path, signed=False, **kwargs) -> Tuple:
+        uri = self._create_futures_data_api_uri(path)
+        info = await self._request(http_method, uri, signed, **kwargs)
+        return *info, path
+
+    async def _request_futures_coin_api(self, http_method, path, signed=False, version=1, **kwargs) -> Tuple:
+        uri = self._create_futures_coin_api_url(path, version=version)
+        info = await self._request(http_method, uri, signed, **kwargs)
+        return *info, path
+
+    async def _request_futures_coin_data_api(self, http_method, path, signed=False, version=1, **kwargs) -> Tuple:
+        uri = self._create_futures_coin_data_api_url(path, version=version)
+        info = await self._request(http_method, uri, signed, **kwargs)
+        return *info, path
+
+    async def _request_options_api(self, http_method, path, signed=False, **kwargs) -> Tuple:
+        uri = self._create_options_api_uri(path)
+        info = await self._request(http_method, uri, signed, **kwargs)
+        return *info, path
+
+    async def _request_margin_api(self, http_method, path, signed=False, **kwargs) -> Tuple:
+        uri = self._create_margin_api_uri(path)
+        info = await self._request(http_method, uri, signed, **kwargs)
+        return *info, path
+
+    async def _request_website(self, http_method, path, signed=False, **kwargs) -> Tuple:
+        uri = self._create_website_uri(path)
+        info = await self._request(http_method, uri, signed, **kwargs)
+        return *info, path

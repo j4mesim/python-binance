@@ -78,3 +78,9 @@ class ContractType(Enum):
     PERPETUAL = "perpetual"
     CURRENT_QUARTER = "current_quarter"
     NEXT_QUARTER = "next_quarter"
+
+
+class ListerState(Enum):
+    RUN = "run"
+    SWITCH = "advancing"
+    STOP = "stop"

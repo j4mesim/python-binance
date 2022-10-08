@@ -1,6 +1,6 @@
 import asyncio
 import threading
-from contextlib import AbstractAsyncContextManager
+from binance.listeners import ApiListener
 from typing import Optional, Dict
 
 from .client import AsyncClient
@@ -17,7 +17,7 @@ class ThreadedApiManager(threading.Thread):
 
         """
         super().__init__()
-        self._loop: asyncio.AbstractEventLoop = asyncio.new_event_loop()
+        self._loop = asyncio.new_event_loop()
         self._client: Optional[AsyncClient] = None
         self._running: bool = True
         self._listener_running: Dict[str, bool] = {}
@@ -40,13 +40,13 @@ class ThreadedApiManager(threading.Thread):
         while self._listener_running:
             await asyncio.sleep(0.2)
 
-    async def start_listener(self, listener: AbstractAsyncContextManager, path: str, callback):
+    async def start_listener(self, listener: ApiListener, path: str, callback: callable):
         async with listener as l:
             while self._listener_running[path]:
                 try:
                     msg = await asyncio.wait_for(l.recv(), 3)
                 except asyncio.TimeoutError:
-                    ...
+                    print('no data')
                     continue
                 if not msg:
                     continue
@@ -72,3 +72,4 @@ class ThreadedApiManager(threading.Thread):
         self._loop.call_soon(asyncio.create_task, self.stop_client())
         for listener_name in self._listener_running.keys():
             self._listener_running[listener_name] = False
+        self._loop.close()

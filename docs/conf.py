@@ -176,7 +176,7 @@ texinfo_documents = [
 
 
 def skip(app, what, name, obj, skip, options):
-    # Ensure that the __init__ method gets documented.
+    # Ensure that the __init__ http_method gets documented.
     if name == "__init__":
         return False
     return skip

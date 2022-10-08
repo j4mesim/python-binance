@@ -5,18 +5,19 @@ import logging
 import time
 from asyncio import sleep
 from enum import Enum
+from pprint import pformat
 from random import random
 from socket import gaierror
-from typing import Optional, List, Dict, Callable, Any
+from typing import Optional, List, Dict, Any, Awaitable, Callable
 
 import websockets as ws
 from websockets.exceptions import ConnectionClosedError
 
-from .client import AsyncClient
+from .client import AsyncClient, AsyncClientPathBuilder
+from .enums import ContractType
 from .enums import FuturesType
 from .exceptions import BinanceWebsocketUnableToConnect
-from .enums import ContractType
-from .listeners import AbstractListener
+from .listeners import ApiListener
 from .threaded_stream import ThreadedApiManager
 
 KEEPALIVE_TIMEOUT = 5 * 60  # 5 minutes
@@ -37,13 +38,13 @@ class BinanceSocketType(str, Enum):
     ACCOUNT = 'Account'
 
 
-class ReconnectingWebsocket(AbstractListener):
+class ReconnectingWebsocket(ApiListener):
     MAX_RECONNECTS = 5
     MAX_RECONNECT_SECONDS = 60
     MIN_RECONNECT_WAIT = 0.1
     TIMEOUT = 10
     NO_MESSAGE_RECONNECT_TIMEOUT = 60
-    MAX_QUEUE_SIZE = 100
+    MAX_QUEUE_SIZE = 1000
 
     def __init__(
         self, url: str, path: Optional[str] = None, prefix: str = 'ws/', is_binary: bool = False, exit_coro=None
@@ -95,6 +96,7 @@ class ReconnectingWebsocket(AbstractListener):
         await self._after_connect()
         # To manage the "cannot call recv while another coroutine is already waiting for the next message"
         if not self._handle_read_loop:
+            print(f"ReconnectingWebsocket._loop: {self._loop} @ {id(self._loop)}")
             self._handle_read_loop = self._loop.call_soon_threadsafe(asyncio.create_task, self._read_loop())
 
     async def _kill_read_loop(self):
@@ -121,6 +123,7 @@ class ReconnectingWebsocket(AbstractListener):
             return None
 
     async def _read_loop(self):
+        print('started _read_loop')
         try:
             while True:
                 try:
@@ -183,7 +186,7 @@ class ReconnectingWebsocket(AbstractListener):
             await asyncio.sleep(reconnect_wait)
             await self.connect()
         else:
-            self._log.error(f'Max reconnections {self.MAX_RECONNECTS} reached:')
+
             # Signal the error
             await self._queue.put({
                 'e': 'error',
@@ -250,6 +253,7 @@ class KeepAliveWebsocket(ReconnectingWebsocket):
         self._start_socket_timer()
 
     def _start_socket_timer(self):
+        print(f"KeepAliveWebsocket._loop: {self._loop} @ {id(self._loop)}")
         self._timer = self._loop.call_later(
             self._user_timeout,
             lambda: asyncio.create_task(self._keepalive_socket())
@@ -294,6 +298,8 @@ class KeepAliveWebsocket(ReconnectingWebsocket):
         finally:
             self._start_socket_timer()
 
+# Path building happens
+
 
 class BinanceSocketManager:
     STREAM_URL = 'wss://stream.binance.{}:9443/'
@@ -323,7 +329,6 @@ class BinanceSocketManager:
         self.VSTREAM_TESTNET_URL = self.VSTREAM_TESTNET_URL.format(client.tld)
 
         self._conns = {}
-        self._loop = asyncio.get_event_loop()
         self._client = client
         self._user_timeout = user_timeout
 
@@ -1174,52 +1179,18 @@ class BinanceSocketManager:
 
         del (self._conns[conn_key])
 
-from typing import Awaitable, Callable
-from binance.listeners import AbstractListener
 
+class BinanceSocketPathBuilder(BinanceSocketManager):
 
-class Poller(AbstractListener):
-
-    def __init__(
-        self, method: Callable[[int], Awaitable[None]], path: str, delay: int = 60, params: Optional[dict] = None
-    ):
-        self.method = method
-        self.delay = delay
-        self.params = params
-        self.path = path
-
-    def __aexit__(self, exc_type, exc_val, exc_tb):
-        pass
-
-    async def recv(self):
-        await asyncio.sleep(self.delay)
-        return await self.method(**self.params)
-
-class ThreadedPollingManager(ThreadedApiManager):
-    #
-    # def __init__(
-    #     self, api_key: Optional[str] = None, api_secret: Optional[str] = None,
-    #     requests_params: Optional[Dict[str, str]] = None, tld: str = 'com',
-    #     testnet: bool = False
-    # ):
-    #     super().__init__(api_key, api_secret, requests_params, tld, testnet)
-
-    async def _before_listener_start(self):
-        assert self._client
-
-    def _start_async_polling(
-        self, callback: Callable, method_name: str, params: Dict[str, Any], path: Optional[str] = None
+    def _get_socket(
+        self, path: str, stream_url: Optional[str] = None, prefix: str = 'ws/', is_binary: bool = False,
+        socket_type: BinanceSocketType = BinanceSocketType.SPOT
     ) -> str:
-        method = getattr(self._client, method_name)
-        poller = Poller(method, )
-        socket = getattr(self._client, method_name)(**params)
-        socket_path: str = path or socket._path  # noqa
-        self._listener_running[socket_path] = True
-        self._loop.call_soon_threadsafe(asyncio.create_task, self.start_listener(socket, socket_path, callback))
-        return socket_path
+        """just return the path built by this module"""
+        return path
 
 
-class ThreadedWebsocketManager(ThreadedApiManager):
+class ThreadedSocketManager(ThreadedApiManager):
 
     def __init__(
         self, api_key: Optional[str] = None, api_secret: Optional[str] = None,
@@ -1227,18 +1198,18 @@ class ThreadedWebsocketManager(ThreadedApiManager):
         testnet: bool = False
     ):
         super().__init__(api_key, api_secret, requests_params, tld, testnet)
-        self._bsm: Optional[BinanceSocketManager] = None
+        self._bm: Optional[BinanceSocketManager] = None
 
     async def _before_listener_start(self):
         assert self._client
-        self._bsm = BinanceSocketManager(client=self._client)
+        self._bm = BinanceSocketManager(client=self._client)
 
     def _start_async_socket(
         self, callback: Callable, socket_name: str, params: Dict[str, Any], path: Optional[str] = None
     ) -> str:
-        while not self._bsm:
+        while not self._bm:
             time.sleep(0.1)
-        socket = getattr(self._bsm, socket_name)(**params)
+        socket = getattr(self._bm, socket_name)(**params)
         socket_path: str = path or socket._path  # noqa
         self._listener_running[socket_path] = True
         self._loop.call_soon_threadsafe(asyncio.create_task, self.start_listener(socket, socket_path, callback))
@@ -1556,3 +1527,130 @@ class ThreadedWebsocketManager(ThreadedApiManager):
         )
 
 
+#
+# class ThreadedSocketPathBuilder(ThreadedSocketManager):
+#
+#     def __init__(
+#         self, api_key: Optional[str] = None, api_secret: Optional[str] = None,
+#         requests_params: Optional[Dict[str, str]] = None, tld: str = 'com',
+#         testnet: bool = False
+#     ):
+#         super(ThreadedSocketPathBuilder, self).__init__(api_key, api_secret, requests_params, tld, testnet)
+#         del self._running
+#         del self._listener_running
+#         del self._bm
+#         self._binance_socket_path_builder: Optional[BinanceSocketPathBuilder] = None
+#
+#     async def init_client(self):
+#         self._client = await AsyncClient.create(loop=self._loop, **self._client_params)
+#         self._binance_socket_path_builder = BinanceSocketPathBuilder(self._client)
+#
+#     async def _before_socket_listener_start(self):
+#         raise UserWarning("This function is not designed to be called") from NotImplementedError
+#
+#     async def start_listener(self, listener, path: str, callback):
+#         raise UserWarning("This function is not designed to be called") from NotImplementedError
+#
+#     def _start_async_socket(
+#         self, callback: Callable, socket_name: str, params: Dict[str, Any], path: Optional[str] = None
+#     ) -> str:
+#         raise UserWarning("This function is not designed to be called") from NotImplementedError
+#
+#     def run(self):
+#         raise UserWarning("This thread is not designed to be run") from NotImplementedError
+#
+#     def stop_socket(self, socket_name):
+#         raise UserWarning("This function is not designed to be called") from NotImplementedError
+#
+#     async def stop_client(self):
+#         raise UserWarning("This function is not designed to be called") from NotImplementedError
+#
+#     def stop(self):
+#         raise UserWarning("This function is not designed to be called") from NotImplementedError
+
+
+AsyncCallable = Callable[[...], Awaitable[None]]
+
+
+class Poller(ApiListener):
+
+    def __init__(
+        self, method: AsyncCallable, path: Optional[str] = None, delay: int = 60, params: Optional[dict] = None
+    ):
+        self.method = method
+        self.delay = delay
+        self.params: Optional[dict] = params
+        self.path = path
+
+    async def recv(self):
+        msg = await self.method(**(self.params or {}))
+        await asyncio.sleep(self.delay)
+        return msg
+
+    def __hash__(self):
+        return hash((self.method, self.path, self.params))
+
+    def __repr__(self):
+        return f'{self.__class__.__name__}({self.method}, {self.delay}, {self.params}, {self.path})'
+
+
+class BinancePollerManager:
+
+    def __init__(self, client: AsyncClient, path_builder: AsyncClientPathBuilder):
+
+        self._conns = {}
+        self._loop = asyncio.get_event_loop()
+        self._client = client
+        self._path_builder = path_builder
+        self.testnet = self._client.testnet
+
+    async def get_path_info(self, method: str, params: Optional[Dict[str, Any]] = None):
+        get_path_info = getattr(self._path_builder, method)
+        return await get_path_info(**(params or {}))
+
+    async def get_async_listener(self, method: str, delay: int | float,
+                                 params: Optional[Dict[str, Any]] = None) -> Poller:
+        http_method, uri, signed, force_params, kwargs, path = await self.get_path_info(method, params)
+        if path not in self._conns:
+            get_response = getattr(self._client, method)
+            self._conns[path] = Poller(get_response, path, delay, params or None)
+
+        return self._conns[path]
+
+
+class ThreadedPollingManager(ThreadedApiManager):
+
+    def __init__(
+        self, api_key: Optional[str] = None, api_secret: Optional[str] = None,
+        requests_params: Optional[Dict[str, str]] = None, tld: str = 'com',
+        testnet: bool = False
+    ):
+        super().__init__(api_key, api_secret, requests_params, tld, testnet)
+        self._bm: Optional[BinancePollerManager] = None
+
+    async def _before_listener_start(self):
+        assert self._client
+        path_builder = AsyncClientPathBuilder(**self._client_params)
+        self._bm = BinancePollerManager(self._client, path_builder)
+
+    async def _start_async_polling(
+        self, callback: Callable, listener_name: str, delay: int | float, params: Optional[Dict[str, Any]] = None
+    ) -> str:
+        listener = await self._bm.get_async_listener(listener_name, delay, params)
+        await self.start_listener(listener, listener.path, callback)
+        return listener.path
+
+    def start_async_polling(
+        self, callback: Callable, listener_name: str, delay: int | float, params: Optional[Dict[str, Any]] = None
+    ) -> str:
+        while not self._bm:
+            time.sleep(0.1)
+
+        # expensive call but appears to be necessary to get sync/async compatible.
+        *_, path = asyncio.run(self._bm.get_path_info(listener_name, params))
+
+        self._listener_running[path] = True
+        self._loop.call_soon_threadsafe(
+            asyncio.create_task,
+            self._start_async_polling(callback, listener_name, delay, params))
+        return path

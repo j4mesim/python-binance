@@ -9,3 +9,9 @@ python_binance.egg-info/
 *.egg-info/
 .idea/
 venv*/
+*.env
+*.conf*
+*.prod.conf*
+*.test.conf*
+*.conf.prod*
+*.conf.test*
